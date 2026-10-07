@@ -1,0 +1,17 @@
+# Credenciais locais (use secrets.example.h como modelo)
+secrets.h
+
+# Saída de compilação (arduino-cli / Wokwi)
+build/
+
+# Editores e sistema
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Google Drive
+*.gdoc
+.tmp.driveupload/

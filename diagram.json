@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "author": "Nivel",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "wokwi-esp32-devkit-v1", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "board-ssd1306", "id": "oled", "top": -60, "left": 200, "attrs": { "i2cAddress": "0x3c" } },
+    { "type": "wokwi-hc-sr04", "id": "sonar", "top": 120, "left": 200, "attrs": { "distance": "50" } }
+  ],
+  "connections": [
+    [ "esp:TX0", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX0", "$serialMonitor:TX", "", [] ],
+    [ "oled:GND", "esp:GND.1", "black", [] ],
+    [ "oled:VCC", "esp:3V3", "red", [] ],
+    [ "oled:SDA", "esp:D21", "blue", [] ],
+    [ "oled:SCL", "esp:D22", "green", [] ],
+    [ "sonar:VCC", "esp:3V3", "red", [] ],
+    [ "sonar:GND", "esp:GND.2", "black", [] ],
+    [ "sonar:TRIG", "esp:D12", "orange", [] ],
+    [ "sonar:ECHO", "esp:D14", "purple", [] ]
+  ],
+  "dependencies": {}
+}

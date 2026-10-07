@@ -1,0 +1,4 @@
+[wokwi]
+version = 1
+firmware = 'build/Nivel.ino.merged.bin'
+elf = 'build/Nivel.ino.elf'
