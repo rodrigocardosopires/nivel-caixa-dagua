@@ -146,7 +146,7 @@ flowchart TD
 
 ```
 +--------------------------------+
-| HA      45 cm   (ou ALERTA!)   |  <- faixa superior (Y 0-15)
+| [W][H]     45 cm  (ou ALERTA!) |  <- faixa superior (Y 0-15)
 |   _____                        |
 |  |     |                       |
 |  |#####|      50%              |  <- gráfico da caixa + porcentagem
@@ -155,7 +155,9 @@ flowchart TD
 +--------------------------------+
 ```
 
-- `HA` aparece no canto quando a conexão com o Home Assistant (MQTT) está ativa.
+- `[W]` é o ícone de Wi-Fi: aparece quando a ESP32 está conectada à rede.
+- `[H]` é o ícone de casa (estilo Home Assistant): aparece quando a conexão MQTT com o Home Assistant está ativa.
+- O valor em cm (ou `ALERTA!`) fica centralizado no espaço à direita dos ícones.
 - Em nível baixo, o valor em cm alterna com `ALERTA!` a cada 500 ms.
 - Em falha do sensor, a tela inteira mostra `ERRO SENSOR`.
 
@@ -339,7 +341,7 @@ O repositório inclui `diagram.json` (circuito) e `wokwi.toml` (aponta para a fi
 | 90 cm ou mais | menos de 15%, `ALERTA!` piscando |
 | acima de 102 cm | `ERRO SENSOR` após ~1,4 s |
 
-> No simulador não há acesso à sua rede nem ao Home Assistant: a medição e a tela funcionam, mas o indicador `HA` não aparece.
+> No simulador não há acesso à sua rede nem ao Home Assistant: a medição e a tela funcionam, mas os ícones de Wi-Fi e de casa não aparecem.
 
 ---
 
@@ -372,7 +374,8 @@ Todos no início do `Nivel.ino`:
 | `ERRO SENSOR` frequente | HC-SR04 comum instável em 3,3 V, ou fiação | Usar HC-SR04P, ou alimentar em 5 V com divisor no ECHO |
 | Valor oscilando | Turbulência ou eco nas paredes | Reduzir `ALFA_EMA` (ex.: 0.1) e afastar o sensor das paredes |
 | Display apagado | Endereço I2C ou fiação | Conferir SDA/SCL; o Serial mostra `Display SSD1306 nao encontrado` |
-| `HA` não aparece na tela | Wi-Fi ou MQTT | Ver `MQTT falhou, rc=...` no Serial |
+| Ícone de Wi-Fi não aparece | SSID/senha errados ou rede 5 GHz | Conferir `secrets.h` |
+| Wi-Fi aparece, mas a casa não | MQTT | Ver `MQTT falhou, rc=...` no Serial |
 | `rc=5` | Usuário/senha MQTT incorretos | Conferir `secrets.h` e o usuário no HA |
 | `rc=-2` | Broker inacessível | Conferir `MQTT_HOST` e se o Mosquitto está rodando |
 | Wi-Fi não conecta | Rede 5 GHz ou senha errada | A ESP32 só conecta em 2,4 GHz |

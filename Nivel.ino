@@ -102,6 +102,27 @@ bool calibracaoPendente = false;
 
 bool publicacaoPendente = false;
 bool mqttConectadoNaTela = false;
+bool wifiConectadoNaTela = false;
+
+// Ícones 16x16 da faixa superior (1 bit por pixel, 2 bytes por linha)
+const int ICONE_TAM = 16;
+const int ICONE_WIFI_X = 0;
+const int ICONE_HA_X = 18;
+const int TEXTO_TOPO_X = 36; // início da área de texto, à direita dos ícones
+
+const uint8_t ICONE_WIFI[] PROGMEM = {
+  0x00, 0x00, 0x07, 0xE0, 0x1F, 0xF8, 0x78, 0x1E,
+  0xE0, 0x07, 0x87, 0xE1, 0x1F, 0xF8, 0x38, 0x1C,
+  0x20, 0x04, 0x03, 0xC0, 0x07, 0xE0, 0x04, 0x20,
+  0x00, 0x00, 0x01, 0x80, 0x03, 0xC0, 0x01, 0x80
+};
+
+const uint8_t ICONE_HOME_ASSISTANT[] PROGMEM = {
+  0x01, 0x80, 0x03, 0xC0, 0x06, 0x60, 0x0C, 0x30,
+  0x1B, 0xD8, 0x33, 0xCC, 0x6D, 0xB6, 0xCD, 0xB3,
+  0x45, 0xA2, 0x43, 0xC2, 0x41, 0x82, 0x41, 0x82,
+  0x41, 0x82, 0x41, 0x82, 0x7F, 0xFE, 0x00, 0x00
+};
 unsigned long ultimaTentativaMqtt = 0;
 unsigned long ultimaPublicacao = 0;
 
@@ -379,15 +400,18 @@ void desenharErro() {
 }
 
 void desenharNivel() {
-  // ZONA AMARELA (Y: 0 a 15)
-  display.setTextSize(2);
-  display.setCursor(40, 0);
+  // ZONA AMARELA (Y: 0 a 15): texto centralizado à direita dos ícones
+  char texto[12];
   if (exibirTextoAlerta) {
-    display.print(F("ALERTA!"));
+    strcpy(texto, "ALERTA!");
   } else {
-    display.print(nivelCm);
-    display.print(F(" cm"));
+    snprintf(texto, sizeof(texto), "%d cm", nivelCm);
   }
+  const int larguraCaractere = 12; // fonte padrão 6px x tamanho 2
+  int larguraTexto = strlen(texto) * larguraCaractere;
+  display.setTextSize(2);
+  display.setCursor(TEXTO_TOPO_X + (SCREEN_WIDTH - TEXTO_TOPO_X - larguraTexto) / 2, 0);
+  display.print(texto);
 
   // ZONA AZUL (Y: 16 a 63)
   display.drawRect(10, 20, 30, 40, SSD1306_WHITE);
@@ -410,10 +434,11 @@ void desenharTela() {
   } else {
     desenharNivel();
   }
+  if (wifiConectadoNaTela) {
+    display.drawBitmap(ICONE_WIFI_X, 0, ICONE_WIFI, ICONE_TAM, ICONE_TAM, SSD1306_WHITE);
+  }
   if (mqttConectadoNaTela) {
-    display.setTextSize(2);
-    display.setCursor(2, 0);
-    display.print(F("HA"));
+    display.drawBitmap(ICONE_HA_X, 0, ICONE_HOME_ASSISTANT, ICONE_TAM, ICONE_TAM, SSD1306_WHITE);
   }
   display.display();
 }
@@ -460,6 +485,11 @@ void loop() {
   }
 
   manterMqtt(agora);
+  bool wifiConectado = WiFi.status() == WL_CONNECTED;
+  if (wifiConectado != wifiConectadoNaTela) {
+    wifiConectadoNaTela = wifiConectado;
+    precisaRedesenhar = true;
+  }
   if (mqtt.connected() != mqttConectadoNaTela) {
     mqttConectadoNaTela = mqtt.connected();
     precisaRedesenhar = true;
