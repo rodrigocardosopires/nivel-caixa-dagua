@@ -1,5 +1,8 @@
 # Nível Caixa d'Água
 
+[![Compilar firmware](https://github.com/rodrigocardosopires/nivel-caixa-dagua/actions/workflows/compilar.yml/badge.svg)](https://github.com/rodrigocardosopires/nivel-caixa-dagua/actions/workflows/compilar.yml)
+[![Licença: MIT](https://img.shields.io/badge/licen%C3%A7a-MIT-blue.svg)](LICENSE)
+
 Medidor de nível de caixa d'água com **ESP32**, sensor ultrassônico **HC-SR04** e display **OLED SSD1306**, integrado ao **Home Assistant** via **MQTT** com descoberta automática.
 
 O nível é exibido localmente no display (em cm, em % e em um gráfico da caixa) e publicado no Home Assistant, onde também é possível **calibrar as distâncias de caixa cheia e vazia** sem regravar a firmware.
@@ -34,6 +37,7 @@ O nível é exibido localmente no display (em cm, em % e em um gráfico da caixa
 - **Home Assistant via MQTT Discovery**: o dispositivo e suas entidades aparecem sozinhos, sem YAML.
 - **Calibração remota**: distâncias de caixa cheia e vazia editáveis no Home Assistant e salvas na flash da ESP32.
 - **Funciona offline**: sem Wi-Fi ou sem broker, a medição e o display continuam operando normalmente.
+- **Watchdog**: se o firmware travar por mais de 8 s, a ESP32 reinicia sozinha; o motivo do último reinício aparece no Serial e no Home Assistant.
 - **Simulação**: projeto pronto para rodar no [Wokwi](https://wokwi.com/) dentro do VS Code / Cursor.
 
 ---
@@ -121,7 +125,8 @@ O `loop()` nunca fica bloqueado por `delay()`. Cada tarefa roda no seu próprio 
 
 ```mermaid
 flowchart TD
-    loopStart[loop] --> checkMed{"passaram 70 ms?"}
+    loopStart[loop] --> wdt["esp_task_wdt_reset: alimenta o watchdog"]
+    wdt --> checkMed{"passaram 70 ms?"}
     checkMed -->|sim| medir["processarMedida: ler, filtrar, calcular nivel"]
     checkMed -->|nao| checkPisca
     medir --> checkPisca{"em alerta e passaram 500 ms?"}
@@ -141,6 +146,17 @@ flowchart TD
 | Reconexão MQTT | 10 s (quando desconectado) | `manterMqtt()` |
 | Publicação de estado | ao mudar (mín. 2 s) + a cada 60 s | `publicarEstado()` |
 | Redesenho da tela | somente quando algo muda | `desenharTela()` |
+| Alimentação do watchdog | a cada volta do `loop()` | `esp_task_wdt_reset()` |
+
+### Watchdog
+
+O firmware usa o **Task Watchdog Timer (TWDT)** do ESP-IDF, configurado em `iniciarWatchdog()` logo no início do `setup()`:
+
+- A tarefa do `setup()`/`loop()` é monitorada. Se o `loop()` ficar mais de **8 s** (`TIMEOUT_WATCHDOG_MS`) sem rodar, por exemplo por um travamento no I2C, na pilha de rede ou em um laço infinito, o watchdog dispara um *panic* e a ESP32 reinicia.
+- A tarefa ociosa do núcleo 0 (onde roda o Wi-Fi) também é monitorada, como no padrão do core Arduino.
+- O tempo de 8 s fica bem acima dos bloqueios normais do firmware (tentativa de conexão MQTT de ~1 s e timeout de socket de 2 s), para não haver reinícios falsos.
+- Após o boot, o motivo do reinício (`Watchdog de tarefa`, `Energia ligada`, `Queda de tensao` etc.) é mostrado no Monitor Serial e publicado no Home Assistant na entidade **Motivo do último reinício**.
+- Compatível com o core ESP32 3.x (ESP-IDF 5, usa `esp_task_wdt_reconfigure`) e 2.x (ESP-IDF 4).
 
 ### Tela OLED
 
@@ -232,6 +248,7 @@ Dispositivo: **Nível Caixa d'Água**
 | Erro do sensor | `binary_sensor` (problem) | - | Diagnóstico |
 | Distância caixa vazia | `number` (2 a 400) | cm | Configuração |
 | Distância caixa cheia | `number` (2 a 400) | cm | Configuração |
+| Motivo do último reinício | `sensor` (texto) | - | Diagnóstico |
 
 ### Tópicos MQTT
 
@@ -242,6 +259,7 @@ Dispositivo: **Nível Caixa d'Água**
 | `<id>/status` | ESP32 → broker | sim | `online` / `offline` (LWT) |
 | `<id>/estado` | ESP32 → broker | sim | `{"nivel":45,"porcentagem":50,"alerta":false,"erro":false}` |
 | `<id>/calibracao` | ESP32 → broker | sim | `{"vazia":100,"cheia":10}` |
+| `<id>/reinicio` | ESP32 → broker | sim | motivo do último reinício, ex.: `Watchdog de tarefa` |
 | `<id>/calibracao/vazia/set` | HA → ESP32 | não | número em cm |
 | `<id>/calibracao/cheia/set` | HA → ESP32 | não | número em cm |
 | `homeassistant/<componente>/<id>/<chave>/config` | ESP32 → broker | sim | mensagens de descoberta |
@@ -249,6 +267,15 @@ Dispositivo: **Nível Caixa d'Água**
 ---
 
 ## Instalação
+
+### 0. Baixar o projeto
+
+```bash
+git clone https://github.com/rodrigocardosopires/nivel-caixa-dagua.git Nivel
+cd Nivel
+```
+
+> Clone para uma pasta chamada `Nivel`: a Arduino IDE exige que a pasta tenha o mesmo nome do `Nivel.ino`. Se baixar o ZIP pelo GitHub, renomeie a pasta extraída para `Nivel`.
 
 ### 1. Requisitos
 
@@ -362,6 +389,7 @@ Todos no início do `Nivel.ino`:
 | `ALFA_EMA` | 0.2 | Suavização: menor = mais estável, maior = mais rápido |
 | `INTERVALO_MIN_PUBLICACAO_MS` | 2 s | Intervalo mínimo entre publicações MQTT |
 | `INTERVALO_HEARTBEAT_MS` | 60 s | Republicação periódica do estado |
+| `TIMEOUT_WATCHDOG_MS` | 8 s | Tempo sem o `loop()` rodar até a ESP32 reiniciar |
 | `DEBUG` | ativo | Logs no Monitor Serial |
 
 ---
@@ -379,6 +407,8 @@ Todos no início do `Nivel.ino`:
 | `rc=5` | Usuário/senha MQTT incorretos | Conferir `secrets.h` e o usuário no HA |
 | `rc=-2` | Broker inacessível | Conferir `MQTT_HOST` e se o Mosquitto está rodando |
 | Wi-Fi não conecta | Rede 5 GHz ou senha errada | A ESP32 só conecta em 2,4 GHz |
+| Reinícios com motivo `Watchdog de tarefa` | O `loop()` ficou travado por mais de 8 s | Ver no Serial o que foi registrado antes do `task_wdt`; conferir fiação do I2C e do sensor |
+| Reinícios com motivo `Queda de tensao` | Fonte fraca ou cabo USB ruim | Usar fonte de 5 V / 1 A e um cabo mais curto |
 
 ---
 

@@ -4,6 +4,9 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <Preferences.h>
+#include <esp_task_wdt.h>
+#include <esp_system.h>
+#include <esp_idf_version.h>
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -12,7 +15,7 @@
 #include "secrets.example.h"
 #endif
 
-// Descomente para ver as leituras no Monitor Serial (115200)
+// Logs no Monitor Serial (115200). Comente a linha abaixo para desativar.
 #define DEBUG
 
 // Configurações do Display OLED
@@ -88,6 +91,10 @@ const unsigned long INTERVALO_MIN_PUBLICACAO_MS = 2000;
 const unsigned long INTERVALO_HEARTBEAT_MS = 60000;
 const uint32_t TIMEOUT_CONEXAO_MQTT_MS = 1000; // conexão bloqueia o loop; manter curto
 
+// Watchdog: reinicia a ESP32 se o loop() ficar sem rodar por este tempo.
+// Deve ficar bem acima do pior bloqueio normal (conexão MQTT de 1 s + timeout de socket de 2 s).
+const uint32_t TIMEOUT_WATCHDOG_MS = 8000;
+
 WiFiClient wifiClient;
 PubSubClient mqtt(wifiClient);
 
@@ -97,6 +104,9 @@ char topicoStatus[48];
 char topicoCalibracao[48];
 char topicoCmdVazia[56];
 char topicoCmdCheia[56];
+char topicoReinicio[48];
+
+const char* motivoReinicio = "";
 
 bool calibracaoPendente = false;
 
@@ -125,6 +135,40 @@ const uint8_t ICONE_HOME_ASSISTANT[] PROGMEM = {
 };
 unsigned long ultimaTentativaMqtt = 0;
 unsigned long ultimaPublicacao = 0;
+
+void iniciarWatchdog() {
+#if ESP_IDF_VERSION_MAJOR >= 5
+  esp_task_wdt_config_t config = {
+    .timeout_ms = TIMEOUT_WATCHDOG_MS,
+    // Só a tarefa ociosa do núcleo 0 (Wi-Fi): o loop() roda no núcleo 1 sem ceder tempo à ociosa dele
+    .idle_core_mask = 1 << 0,
+    .trigger_panic = true,
+  };
+  // O core Arduino 3.x já inicia o watchdog; nesse caso só é preciso reconfigurar
+  if (esp_task_wdt_reconfigure(&config) == ESP_ERR_INVALID_STATE) {
+    esp_task_wdt_init(&config);
+  }
+#else
+  esp_task_wdt_init((TIMEOUT_WATCHDOG_MS + 999) / 1000, true);
+#endif
+  esp_task_wdt_add(NULL); // monitora a tarefa do setup()/loop()
+}
+
+const char* descreverMotivoReinicio(esp_reset_reason_t motivo) {
+  switch (motivo) {
+    case ESP_RST_POWERON:   return "Energia ligada";
+    case ESP_RST_EXT:       return "Pino externo";
+    case ESP_RST_SW:        return "Software";
+    case ESP_RST_PANIC:     return "Falha (panic)";
+    case ESP_RST_INT_WDT:   return "Watchdog de interrupcao";
+    case ESP_RST_TASK_WDT:  return "Watchdog de tarefa";
+    case ESP_RST_WDT:       return "Watchdog";
+    case ESP_RST_DEEPSLEEP: return "Deep sleep";
+    case ESP_RST_BROWNOUT:  return "Queda de tensao";
+    case ESP_RST_SDIO:      return "SDIO";
+    default:                return "Desconhecido";
+  }
+}
 
 long lerDistanciaMm() {
   digitalWrite(PIN_TRIG, LOW);
@@ -274,7 +318,17 @@ void aoReceberMqtt(char* topico, byte* payload, unsigned int tamanho) {
   unsigned int n = min(tamanho, (unsigned int)sizeof(texto) - 1);
   memcpy(texto, payload, n);
   texto[n] = '\0';
-  int valorCm = (int)lroundf(atof(texto));
+
+  char* fim;
+  float valor = strtof(texto, &fim);
+  if (fim == texto || !isfinite(valor) || valor < DISTANCIA_MIN_CM || valor > DISTANCIA_MAX_CM) {
+#ifdef DEBUG
+    Serial.print(F("Comando MQTT invalido: ")); Serial.println(texto);
+#endif
+    calibracaoPendente = true; // faz o HA voltar a mostrar o valor atual
+    return;
+  }
+  int valorCm = (int)lroundf(valor);
 
   if (strcmp(topico, topicoCmdVazia) == 0) {
     aplicarCalibracao(valorCm, distanciaCheiaCm);
@@ -287,10 +341,16 @@ void publicarConfig(const char* componente, const char* chave, const char* topic
   char topico[96];
   char payload[640];
   snprintf(topico, sizeof(topico), "homeassistant/%s/%s/%s/config", componente, idDispositivo, chave);
-  snprintf(payload, sizeof(payload),
+  int tamanho = snprintf(payload, sizeof(payload),
            "{\"uniq_id\":\"%s_%s\",\"stat_t\":\"%s\",\"avty_t\":\"%s\",%s,"
            "\"dev\":{\"ids\":[\"%s\"],\"name\":\"Nível Caixa d'Água\",\"mf\":\"DIY\",\"mdl\":\"ESP32 DevKit V1 + HC-SR04\"}}",
            idDispositivo, chave, topicoDeEstado, topicoStatus, campos, idDispositivo);
+  if (tamanho >= (int)sizeof(payload)) {
+#ifdef DEBUG
+    Serial.print(F("Descoberta truncada, aumente o buffer: ")); Serial.println(chave);
+#endif
+    return;
+  }
   mqtt.publish(topico, payload, true);
 }
 
@@ -326,6 +386,8 @@ void publicarDescoberta() {
   publicarConfig("binary_sensor", "erro", topicoEstado,
     "\"name\":\"Erro do sensor\",\"dev_cla\":\"problem\",\"ent_cat\":\"diagnostic\","
     "\"val_tpl\":\"{{ 'ON' if value_json.erro else 'OFF' }}\"");
+  publicarConfig("sensor", "reinicio", topicoReinicio,
+    "\"name\":\"Motivo do último reinício\",\"ent_cat\":\"diagnostic\",\"ic\":\"mdi:restart-alert\"");
 }
 
 void publicarEstado() {
@@ -347,6 +409,7 @@ void iniciarRede() {
   snprintf(topicoCalibracao, sizeof(topicoCalibracao), "%s/calibracao", idDispositivo);
   snprintf(topicoCmdVazia, sizeof(topicoCmdVazia), "%s/calibracao/vazia/set", idDispositivo);
   snprintf(topicoCmdCheia, sizeof(topicoCmdCheia), "%s/calibracao/cheia/set", idDispositivo);
+  snprintf(topicoReinicio, sizeof(topicoReinicio), "%s/reinicio", idDispositivo);
 
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(idDispositivo);
@@ -375,6 +438,7 @@ void manterMqtt(unsigned long agora) {
     }
     mqtt.publish(topicoStatus, "online", true);
     publicarDescoberta();
+    mqtt.publish(topicoReinicio, motivoReinicio, true);
     mqtt.subscribe(topicoCmdVazia);
     mqtt.subscribe(topicoCmdCheia);
     calibracaoPendente = true;
@@ -443,8 +507,17 @@ void desenharTela() {
   display.display();
 }
 
+bool dispositivoI2cPresente(uint8_t endereco) {
+  Wire.beginTransmission(endereco);
+  return Wire.endTransmission() == 0;
+}
+
 void setup() {
+  iniciarWatchdog();
   Serial.begin(115200);
+
+  motivoReinicio = descreverMotivoReinicio(esp_reset_reason());
+  Serial.print(F("Motivo do reinicio: ")); Serial.println(motivoReinicio);
 
   pinMode(PIN_TRIG, OUTPUT);
   pinMode(PIN_ECHO, INPUT);
@@ -453,9 +526,17 @@ void setup() {
   Wire.begin(21, 22);
   Wire.setClock(I2C_CLOCK);
 
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C) &&
-      !display.begin(SSD1306_SWITCHCAPVCC, 0x3D)) {
-    Serial.println(F("Display SSD1306 nao encontrado (0x3C/0x3D)"));
+  // display.begin() não verifica se o display responde, por isso o endereço é sondado antes
+  uint8_t enderecoOled = 0x3C;
+  if (!dispositivoI2cPresente(0x3C)) {
+    if (dispositivoI2cPresente(0x3D)) {
+      enderecoOled = 0x3D;
+    } else {
+      Serial.println(F("Display SSD1306 nao encontrado (0x3C/0x3D)"));
+    }
+  }
+  if (!display.begin(SSD1306_SWITCHCAPVCC, enderecoOled)) {
+    Serial.println(F("Sem memoria para o buffer do display"));
   }
 
   display.clearDisplay();
@@ -471,6 +552,7 @@ void setup() {
 }
 
 void loop() {
+  esp_task_wdt_reset();
   unsigned long agora = millis();
 
   if (agora - ultimaMedida >= INTERVALO_MEDIDA_MS) {

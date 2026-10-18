@@ -2,7 +2,16 @@ name: Compilar firmware
 
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   compilar:
@@ -22,3 +31,4 @@ jobs:
             - name: PubSubClient
           sketch-paths: |
             - ./
+          enable-warnings-report: true
