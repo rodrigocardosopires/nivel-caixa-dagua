@@ -17,7 +17,10 @@ jobs:
   compilar:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # A pasta do sketch precisa ter o mesmo nome do .ino
+      - uses: actions/checkout@v5
+        with:
+          path: Nivel
 
       - uses: arduino/compile-sketches@v1
         with:
@@ -30,5 +33,5 @@ jobs:
             - name: Adafruit GFX Library
             - name: PubSubClient
           sketch-paths: |
-            - ./
+            - Nivel
           enable-warnings-report: true
